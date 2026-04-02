@@ -2,7 +2,6 @@
 
 import streamlit as st
 import pandas as pd
-import json
 
 from engine.schema_detector import detect_schema
 from engine.issue_detector import detect_all_issues, ISSUE_TYPES, ISSUE_COLORS, Issue
@@ -17,42 +16,54 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ─────────────────────────────────────────────────────
+# ── Custom CSS (dark mode compatible) ──────────────────────────────
 
 st.markdown("""
 <style>
     .main-header {
         font-size: 2.2rem;
         font-weight: 700;
-        color: #2F4F4F;
         margin-bottom: 0.2rem;
     }
     .sub-header {
         font-size: 1rem;
-        color: #666;
+        opacity: 0.7;
         margin-bottom: 2rem;
     }
     .metric-card {
-        background: #f8f9fa;
         border-radius: 10px;
         padding: 1.2rem;
         text-align: center;
-        border: 1px solid #e9ecef;
+        border: 1px solid rgba(128,128,128,0.3);
     }
     .metric-value {
         font-size: 2rem;
         font-weight: 700;
-        color: #2F4F4F;
     }
     .metric-label {
         font-size: 0.85rem;
-        color: #888;
+        opacity: 0.6;
         margin-top: 0.3rem;
     }
-    .risk-critical { color: #800020; font-weight: 700; }
-    .risk-high { color: #FF0000; font-weight: 700; }
-    .risk-medium { color: #DAA520; font-weight: 600; }
-    .risk-low { color: #8B8000; }
+    .risk-critical { color: #C0392B; font-weight: 700; }
+    .risk-high { color: #E74C3C; font-weight: 700; }
+    .risk-medium { color: #E67E22; font-weight: 600; }
+    .risk-low { color: #27AE60; }
+    .issue-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        color: #1a1a1a;
+        margin-bottom: 4px;
+    }
+    .issue-card {
+        padding: 8px 12px;
+        margin-bottom: 8px;
+        border-radius: 4px;
+        border-left-width: 4px;
+        border-left-style: solid;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,54 +72,29 @@ st.markdown("""
 st.markdown('<div class="main-header">Data Quality Agent</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Veri kalitesi sorunlarını otomatik tespit edin, kategorize edin ve önceliklendirin.</div>', unsafe_allow_html=True)
 
-# ── Sidebar: File Upload & Rules ───────────────────────────────────
+# ── Sidebar: File Upload Only ──────────────────────────────────────
 
 with st.sidebar:
     st.header("Dosya Yükleme")
     uploaded_file = st.file_uploader(
         "CSV veya Excel dosyası yükleyin",
         type=["csv", "xlsx", "xls"],
-        help="Maksimum 200MB"
     )
 
-    st.divider()
-    st.header("Kullanıcı Tanımlı Kurallar")
-    st.caption("Belirli kolonlar için doğrulama kuralları tanımlayabilirsiniz.")
-
-    use_custom_rules = st.toggle("Özel kural tanımla", value=False)
-    user_rules = {}
-
-    if use_custom_rules:
-        rules_json = st.text_area(
-            "Kuralları JSON formatında girin",
-            value='{\n  "column_name": {\n    "min_value": 0,\n    "max_value": 100,\n    "regex": "^[A-Z]"\n  }\n}',
-            height=200,
-            help="Desteklenen alanlar: dtype, regex, min_length, max_length, min_value, max_value, allowed_values"
-        )
-        try:
-            user_rules = json.loads(rules_json)
-            st.success("Kurallar geçerli ✓")
-        except json.JSONDecodeError as e:
-            st.error(f"JSON hatası: {e}")
-            user_rules = {}
-
-# ── Main Content ───────────────────────────────────────────────────
+# ── Landing Page ───────────────────────────────────────────────────
 
 if uploaded_file is None:
     st.info("Başlamak için sol panelden bir dosya yükleyin.")
 
-    # Landing page info
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### Tespit Edilen Sorun Tipleri")
         for itype, label in ISSUE_TYPES.items():
             color = ISSUE_COLORS[itype]
             st.markdown(
-                f'<span style="background-color:#{color}; padding:2px 8px; border-radius:4px; '
-                f'margin-right:8px; font-size:0.85rem;">{label}</span>',
+                f'<span class="issue-badge" style="background-color:#{color};">{label}</span>',
                 unsafe_allow_html=True,
             )
-            st.write("")
 
     with col2:
         st.markdown("### Risk Seviyeleri")
@@ -120,9 +106,10 @@ if uploaded_file is None:
         }
         for level, desc in risk_desc.items():
             color = RISK_COLORS[level]
+            text_color = "#1a1a1a" if level in ("LOW", "MEDIUM") else "#ffffff"
             st.markdown(
-                f'<span style="background-color:#{color}; color:{"#fff" if level in ("HIGH","CRITICAL") else "#000"}; '
-                f'padding:3px 10px; border-radius:4px; font-weight:600;">{level}</span> — {desc}',
+                f'<span style="background-color:#{color}; color:{text_color}; '
+                f'padding:4px 12px; border-radius:4px; font-weight:600;">{level}</span> — {desc}',
                 unsafe_allow_html=True,
             )
             st.write("")
@@ -145,6 +132,103 @@ try:
 except Exception as e:
     st.error(f"Dosya okunamadı: {e}")
     st.stop()
+
+# ── User-Defined Rules Section ─────────────────────────────────────
+
+st.markdown("---")
+st.markdown("### Kural Tanımlama")
+st.caption("Belirli kolonlar için doğrulama kuralları ekleyebilirsiniz. Kural eklemeden de analiz çalıştırabilirsiniz.")
+
+RULE_TYPE_OPTIONS = {
+    "Minimum Değer": "min_value",
+    "Maksimum Değer": "max_value",
+    "Minimum Uzunluk": "min_length",
+    "Maksimum Uzunluk": "max_length",
+    "Veri Tipi": "dtype",
+    "Düzenli İfade (Regex)": "regex",
+    "İzin Verilen Değerler": "allowed_values",
+}
+
+DTYPE_OPTIONS = ["int", "float", "string", "date"]
+
+if "user_rules_list" not in st.session_state:
+    st.session_state.user_rules_list = []
+
+# Add rule form
+with st.expander("Yeni Kural Ekle", expanded=False):
+    rc1, rc2 = st.columns(2)
+    with rc1:
+        selected_col = st.selectbox("Kolon", options=list(df.columns), key="rule_col")
+    with rc2:
+        selected_rule_label = st.selectbox("Kural Tipi", options=list(RULE_TYPE_OPTIONS.keys()), key="rule_type")
+
+    selected_rule_key = RULE_TYPE_OPTIONS[selected_rule_label]
+
+    # Dynamic input based on rule type
+    rule_value = None
+    if selected_rule_key in ("min_value", "max_value"):
+        rule_value = st.number_input(
+            f"{selected_rule_label} girin",
+            value=0.0,
+            format="%.2f",
+            key="rule_num_val",
+        )
+    elif selected_rule_key in ("min_length", "max_length"):
+        rule_value = st.number_input(
+            f"{selected_rule_label} girin",
+            value=1,
+            min_value=0,
+            step=1,
+            key="rule_len_val",
+        )
+    elif selected_rule_key == "dtype":
+        rule_value = st.selectbox("Beklenen veri tipi", options=DTYPE_OPTIONS, key="rule_dtype_val")
+    elif selected_rule_key == "regex":
+        rule_value = st.text_input("Regex deseni", value="", placeholder="^[A-Z].*", key="rule_regex_val")
+    elif selected_rule_key == "allowed_values":
+        rule_value_str = st.text_input(
+            "Virgülle ayırarak yazın",
+            value="",
+            placeholder="Evet, Hayır, Belirsiz",
+            key="rule_allowed_val",
+        )
+        if rule_value_str:
+            rule_value = [v.strip() for v in rule_value_str.split(",") if v.strip()]
+
+    if st.button("Kural Ekle", type="primary"):
+        if rule_value is not None and rule_value != "" and rule_value != []:
+            st.session_state.user_rules_list.append({
+                "col": selected_col,
+                "rule_key": selected_rule_key,
+                "rule_label": selected_rule_label,
+                "value": rule_value,
+            })
+            st.rerun()
+        else:
+            st.warning("Bir değer girin.")
+
+# Show existing rules
+if st.session_state.user_rules_list:
+    st.markdown("**Tanımlanan Kurallar:**")
+    for i, rule in enumerate(st.session_state.user_rules_list):
+        rc1, rc2 = st.columns([5, 1])
+        with rc1:
+            display_val = rule["value"]
+            if isinstance(display_val, list):
+                display_val = ", ".join(display_val)
+            st.markdown(f"`{rule['col']}` — **{rule['rule_label']}**: `{display_val}`")
+        with rc2:
+            if st.button("Sil", key=f"del_rule_{i}"):
+                st.session_state.user_rules_list.pop(i)
+                st.rerun()
+
+# Convert session rules to engine format
+user_rules = {}
+for rule in st.session_state.user_rules_list:
+    col = rule["col"]
+    if col not in user_rules:
+        user_rules[col] = {}
+    user_rules[col][rule["rule_key"]] = rule["value"]
 
 # ── Run Analysis ───────────────────────────────────────────────────
 
@@ -180,7 +264,7 @@ with c5:
     st.metric("Toplam Sorun", f"{len(issues):,}")
 
 # Risk breakdown
-st.markdown("#### 🚨 Risk Dağılımı")
+st.markdown("#### Risk Dağılımı")
 rc1, rc2, rc3, rc4 = st.columns(4)
 for col_widget, level in zip([rc1, rc2, rc3, rc4], RISK_LEVELS):
     with col_widget:
@@ -222,8 +306,8 @@ else:
         with tab:
             color = ISSUE_COLORS[itype]
             st.markdown(
-                f'<span style="background-color:#{color}; padding:4px 12px; border-radius:6px; '
-                f'font-weight:600;">{ISSUE_TYPES[itype]}</span>',
+                f'<span class="issue-badge" style="background-color:#{color};">'
+                f'{ISSUE_TYPES[itype]}</span>',
                 unsafe_allow_html=True,
             )
             st.write("")
@@ -261,10 +345,10 @@ if col_issues:
     for ci in col_issues:
         color = ISSUE_COLORS[ci.issue_type]
         st.markdown(
-            f'<div style="background-color:#{color}22; border-left:4px solid #{color}; '
-            f'padding:8px 12px; margin-bottom:8px; border-radius:4px;">'
+            f'<div class="issue-card" style="border-left-color:#{color}; '
+            f'background-color:#{color}22;">'
             f'<b>{ci.col}</b> — {ISSUE_TYPES[ci.issue_type]}<br/>'
-            f'<span style="color:#666;">{ci.detail}</span></div>',
+            f'<span style="opacity:0.7;">{ci.detail}</span></div>',
             unsafe_allow_html=True,
         )
 

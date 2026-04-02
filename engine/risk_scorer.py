@@ -7,8 +7,8 @@ from .issue_detector import Issue
 RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
 RISK_COLORS = {
-    "LOW": "F5DEB3",       # Beige
-    "MEDIUM": "FFFACD",    # Light Yellow
+    "LOW": "A8D5BA",       # Soft Green
+    "MEDIUM": "F5C242",    # Amber
     "HIGH": "FF0000",      # Red
     "CRITICAL": "800020",  # Bordeaux
 }

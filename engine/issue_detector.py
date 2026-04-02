@@ -7,14 +7,14 @@ from dataclasses import dataclass, field
 
 
 ISSUE_TYPES = {
-    "missing_value": "Missing Values",
-    "format_issue": "Format Issues",
-    "type_drift": "Data Type Drift",
-    "semantic_inconsistency": "Semantic Inconsistency",
-    "duplicate": "Duplicate Records",
-    "range_violation": "Range Violations",
-    "sparse_column": "Sparse Columns",
-    "meaningless_feature": "Meaningless Features",
+    "missing_value": "Eksik Veriler",
+    "format_issue": "Format Hataları",
+    "type_drift": "Karışık Veri Tipleri",
+    "semantic_inconsistency": "Tutarsız Yazımlar",
+    "duplicate": "Tekrarlayan Kayıtlar",
+    "range_violation": "Aralık Dışı Değerler",
+    "sparse_column": "Çok Boş Kolonlar",
+    "meaningless_feature": "Anlamsız Kolonlar",
 }
 
 ISSUE_COLORS = {
