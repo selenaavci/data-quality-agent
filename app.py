@@ -100,7 +100,7 @@ if uploaded_file is None:
     # Landing page info
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("###Tespit Edilen Sorun Tipleri")
+        st.markdown("### Tespit Edilen Sorun Tipleri")
         for itype, label in ISSUE_TYPES.items():
             color = ISSUE_COLORS[itype]
             st.markdown(
@@ -111,7 +111,7 @@ if uploaded_file is None:
             st.write("")
 
     with col2:
-        st.markdown("###Risk Seviyeleri")
+        st.markdown("### Risk Seviyeleri")
         risk_desc = {
             "LOW": "Küçük sorun, düşük etki",
             "MEDIUM": "Dikkat gerektirir ama kritik değil",
