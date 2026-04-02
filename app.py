@@ -13,7 +13,6 @@ from engine.excel_exporter import export_to_excel
 
 st.set_page_config(
     page_title="Data Quality Agent",
-    page_icon="🧪",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -59,13 +58,13 @@ st.markdown("""
 
 # ── Header ─────────────────────────────────────────────────────────
 
-st.markdown('<div class="main-header">🧪 Data Quality Agent</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">Data Quality Agent</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Veri kalitesi sorunlarını otomatik tespit edin, kategorize edin ve önceliklendirin.</div>', unsafe_allow_html=True)
 
 # ── Sidebar: File Upload & Rules ───────────────────────────────────
 
 with st.sidebar:
-    st.header("📁 Dosya Yükleme")
+    st.header("Dosya Yükleme")
     uploaded_file = st.file_uploader(
         "CSV veya Excel dosyası yükleyin",
         type=["csv", "xlsx", "xls"],
@@ -73,7 +72,7 @@ with st.sidebar:
     )
 
     st.divider()
-    st.header("🧩 Kullanıcı Tanımlı Kurallar")
+    st.header("Kullanıcı Tanımlı Kurallar")
     st.caption("Belirli kolonlar için doğrulama kuralları tanımlayabilirsiniz.")
 
     use_custom_rules = st.toggle("Özel kural tanımla", value=False)
@@ -96,12 +95,12 @@ with st.sidebar:
 # ── Main Content ───────────────────────────────────────────────────
 
 if uploaded_file is None:
-    st.info("👈 Başlamak için sol panelden bir dosya yükleyin.")
+    st.info("Başlamak için sol panelden bir dosya yükleyin.")
 
     # Landing page info
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("### 🔍 Tespit Edilen Sorun Tipleri")
+        st.markdown("###Tespit Edilen Sorun Tipleri")
         for itype, label in ISSUE_TYPES.items():
             color = ISSUE_COLORS[itype]
             st.markdown(
@@ -112,7 +111,7 @@ if uploaded_file is None:
             st.write("")
 
     with col2:
-        st.markdown("### 🚨 Risk Seviyeleri")
+        st.markdown("###Risk Seviyeleri")
         risk_desc = {
             "LOW": "Küçük sorun, düşük etki",
             "MEDIUM": "Dikkat gerektirir ama kritik değil",
@@ -157,7 +156,7 @@ with st.spinner("Analiz ediliyor..."):
 # ── Summary Metrics ────────────────────────────────────────────────
 
 st.markdown("---")
-st.markdown("### 📊 Özet")
+st.markdown("### Özet")
 
 row_issues = [i for i in issues if i.row_idx is not None]
 col_issues = [i for i in issues if i.row_idx is None]
@@ -196,7 +195,7 @@ for col_widget, level in zip([rc1, rc2, rc3, rc4], RISK_LEVELS):
 # ── Schema Info ────────────────────────────────────────────────────
 
 st.markdown("---")
-with st.expander("🔎 Tespit Edilen Şema", expanded=False):
+with st.expander("Tespit Edilen Şema", expanded=False):
     schema_df = pd.DataFrame([
         {"Kolon": col, "Tip": dtype, "Boş Değer %": f"{df[col].isna().mean():.1%}", "Benzersiz Değer": df[col].nunique()}
         for col, dtype in schema.items()
@@ -206,7 +205,7 @@ with st.expander("🔎 Tespit Edilen Şema", expanded=False):
 # ── Issue Breakdown ────────────────────────────────────────────────
 
 st.markdown("---")
-st.markdown("### 🔍 Sorun Detayları")
+st.markdown("### Sorun Detayları")
 
 # Group issues by type
 issue_groups: dict[str, list[Issue]] = {}
@@ -217,7 +216,7 @@ tabs = st.tabs([f"{ISSUE_TYPES[k]} ({len(v)})" for k, v in issue_groups.items()]
 
 if not issue_groups:
     with tabs[0]:
-        st.success("Hiçbir veri kalitesi sorunu tespit edilmedi! 🎉")
+        st.success("Hiçbir veri kalitesi sorunu tespit edilmedi!")
 else:
     for tab, (itype, group) in zip(tabs, issue_groups.items()):
         with tab:
@@ -239,7 +238,6 @@ else:
 
             if row_level:
                 st.markdown(f"**Satır Seviyesi Sorunlar:** {len(row_level)} adet")
-                # Show a sample table
                 sample = row_level[:200]
                 detail_df = pd.DataFrame([
                     {
@@ -259,7 +257,7 @@ else:
 
 if col_issues:
     st.markdown("---")
-    st.markdown("### 🏷️ Kolon Seviyesi Sorunlar")
+    st.markdown("### Kolon Seviyesi Sorunlar")
     for ci in col_issues:
         color = ISSUE_COLORS[ci.issue_type]
         st.markdown(
@@ -273,18 +271,18 @@ if col_issues:
 # ── Data Preview ───────────────────────────────────────────────────
 
 st.markdown("---")
-with st.expander("📋 Veri Önizleme", expanded=False):
+with st.expander("Veri Önizleme", expanded=False):
     st.dataframe(df.head(100), use_container_width=True)
 
 # ── Excel Export ───────────────────────────────────────────────────
 
 st.markdown("---")
-st.markdown("### 📤 Excel Çıktısı")
+st.markdown("### Excel Çıktısı")
 
 if issues:
     excel_buf = export_to_excel(df, issues, row_risks)
     st.download_button(
-        label="📥 Excel Dosyasını İndir",
+        label="Excel Dosyasını İndir",
         data=excel_buf,
         file_name="data_quality_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
