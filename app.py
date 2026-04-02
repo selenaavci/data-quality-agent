@@ -28,7 +28,7 @@ st.markdown("""
     .sub-header {
         font-size: 1rem;
         opacity: 0.7;
-        margin-bottom: 2rem;
+        margin-bottom: 1rem;
     }
     .metric-card {
         border-radius: 10px;
@@ -67,53 +67,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ─────────────────────────────────────────────────────────
+# ── Sidebar: Reference Info ────────────────────────────────────────
+
+with st.sidebar:
+    st.markdown("### Sorun Tipleri")
+    for itype, label in ISSUE_TYPES.items():
+        color = ISSUE_COLORS[itype]
+        st.markdown(
+            f'<span class="issue-badge" style="background-color:#{color};">{label}</span>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    st.markdown("### Risk Seviyeleri")
+    risk_desc = {
+        "LOW": "Küçük sorun, düşük etki",
+        "MEDIUM": "Dikkat gerektirir ama kritik değil",
+        "HIGH": "Analiz üzerinde güçlü etki",
+        "CRITICAL": "Modelleme öncesi mutlaka düzeltilmeli",
+    }
+    for level, desc in risk_desc.items():
+        color = RISK_COLORS[level]
+        text_color = "#1a1a1a" if level in ("LOW", "MEDIUM") else "#ffffff"
+        st.markdown(
+            f'<span style="background-color:#{color}; color:{text_color}; '
+            f'padding:4px 12px; border-radius:4px; font-weight:600;">{level}</span> — {desc}',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
+# ── Header + File Upload ──────────────────────────────────────────
 
 st.markdown('<div class="main-header">Data Quality Agent</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Veri kalitesi sorunlarını otomatik tespit edin, kategorize edin ve önceliklendirin.</div>', unsafe_allow_html=True)
 
-# ── Sidebar: File Upload Only ──────────────────────────────────────
-
-with st.sidebar:
-    st.header("Dosya Yükleme")
-    uploaded_file = st.file_uploader(
-        "CSV veya Excel dosyası yükleyin",
-        type=["csv", "xlsx", "xls"],
-    )
-
-# ── Landing Page ───────────────────────────────────────────────────
+uploaded_file = st.file_uploader(
+    "CSV veya Excel dosyası yükleyin",
+    type=["csv", "xlsx", "xls"],
+)
 
 if uploaded_file is None:
-    st.info("Başlamak için sol panelden bir dosya yükleyin.")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### Tespit Edilen Sorun Tipleri")
-        for itype, label in ISSUE_TYPES.items():
-            color = ISSUE_COLORS[itype]
-            st.markdown(
-                f'<span class="issue-badge" style="background-color:#{color};">{label}</span>',
-                unsafe_allow_html=True,
-            )
-
-    with col2:
-        st.markdown("### Risk Seviyeleri")
-        risk_desc = {
-            "LOW": "Küçük sorun, düşük etki",
-            "MEDIUM": "Dikkat gerektirir ama kritik değil",
-            "HIGH": "Analiz üzerinde güçlü etki",
-            "CRITICAL": "Modelleme öncesi mutlaka düzeltilmeli",
-        }
-        for level, desc in risk_desc.items():
-            color = RISK_COLORS[level]
-            text_color = "#1a1a1a" if level in ("LOW", "MEDIUM") else "#ffffff"
-            st.markdown(
-                f'<span style="background-color:#{color}; color:{text_color}; '
-                f'padding:4px 12px; border-radius:4px; font-weight:600;">{level}</span> — {desc}',
-                unsafe_allow_html=True,
-            )
-            st.write("")
-
+    st.info("Başlamak için bir dosya yükleyin.")
     st.stop()
 
 # ── Load Data ──────────────────────────────────────────────────────
@@ -132,6 +126,24 @@ try:
 except Exception as e:
     st.error(f"Dosya okunamadı: {e}")
     st.stop()
+
+# ── Summary Metrics ────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("### Özet")
+
+sc1, sc2, sc3 = st.columns(3)
+with sc1:
+    st.metric("Toplam Satır", f"{len(df):,}")
+with sc2:
+    st.metric("Toplam Kolon", len(df.columns))
+with sc3:
+    st.metric("Dosya", uploaded_file.name)
+
+# ── Data Preview ───────────────────────────────────────────────────
+
+with st.expander("Veri Önizleme", expanded=True):
+    st.dataframe(df.head(100), use_container_width=True)
 
 # ── User-Defined Rules Section ─────────────────────────────────────
 
@@ -237,10 +249,10 @@ with st.spinner("Analiz ediliyor..."):
     issues = detect_all_issues(df, schema, user_rules if user_rules else None)
     row_risks = score_issues(issues, df)
 
-# ── Summary Metrics ────────────────────────────────────────────────
+# ── Analysis Results ───────────────────────────────────────────────
 
 st.markdown("---")
-st.markdown("### Özet")
+st.markdown("### Analiz Sonuçları")
 
 row_issues = [i for i in issues if i.row_idx is not None]
 col_issues = [i for i in issues if i.row_idx is None]
@@ -250,17 +262,13 @@ risk_counts = {}
 for risk in row_risks.values():
     risk_counts[risk] = risk_counts.get(risk, 0) + 1
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3 = st.columns(3)
 with c1:
-    st.metric("Toplam Satır", f"{len(df):,}")
-with c2:
-    st.metric("Toplam Kolon", len(df.columns))
-with c3:
     st.metric("Sorunlu Satır", f"{flagged_rows:,}")
-with c4:
+with c2:
     pct = (flagged_rows / len(df) * 100) if len(df) > 0 else 0
     st.metric("Sorun Oranı", f"%{pct:.1f}")
-with c5:
+with c3:
     st.metric("Toplam Sorun", f"{len(issues):,}")
 
 # Risk breakdown
@@ -351,12 +359,6 @@ if col_issues:
             f'<span style="opacity:0.7;">{ci.detail}</span></div>',
             unsafe_allow_html=True,
         )
-
-# ── Data Preview ───────────────────────────────────────────────────
-
-st.markdown("---")
-with st.expander("Veri Önizleme", expanded=False):
-    st.dataframe(df.head(100), use_container_width=True)
 
 # ── Excel Export ───────────────────────────────────────────────────
 
