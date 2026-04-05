@@ -1,9 +1,17 @@
 """Issue Detection Engine - Detects 8 types of data quality issues."""
 from __future__ import annotations
 
+import re
+import os
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass, field
+import yaml
+
+from .utils import is_missing, missing_mask, is_numeric, is_parseable_date, normalize_semantic
 
 
 ISSUE_TYPES = {
@@ -18,7 +26,7 @@ ISSUE_TYPES = {
 }
 
 ISSUE_COLORS = {
-    "missing_value": "FFFF00",        # Yellow
+    "missing_value": "FFFF00",         # Yellow
     "format_issue": "FFA500",          # Orange
     "type_drift": "FF8C00",            # Dark Orange
     "semantic_inconsistency": "9370DB", # Purple
@@ -36,12 +44,18 @@ class Issue:
     issue_type: str
     detail: str
     value: object = None
+    risk: str | None = None
 
+
+# ── Public API ─────────────────────────────────────────────────────
 
 def detect_all_issues(
     df: pd.DataFrame,
     schema: dict[str, str],
     user_rules: dict | None = None,
+    duplicate_keys: list[str] | None = None,
+    fuzzy_threshold: float = 0.0,
+    range_rules_path: str | None = None,
 ) -> list[Issue]:
     """Run all detectors and return a flat list of issues."""
     issues: list[Issue] = []
@@ -49,8 +63,8 @@ def detect_all_issues(
     issues.extend(_detect_format_issues(df, schema))
     issues.extend(_detect_type_drift(df))
     issues.extend(_detect_semantic_inconsistency(df, schema))
-    issues.extend(_detect_duplicates(df))
-    issues.extend(_detect_range_violations(df, schema))
+    issues.extend(_detect_duplicates(df, duplicate_keys, fuzzy_threshold))
+    issues.extend(_detect_range_violations(df, schema, range_rules_path))
     issues.extend(_detect_sparse_columns(df))
     issues.extend(_detect_meaningless_features(df, schema))
     if user_rules:
@@ -58,23 +72,23 @@ def detect_all_issues(
     return issues
 
 
-# ── 1. Missing Values ──────────────────────────────────────────────
+# ── 1. Missing Values ─────────────────────────────────────────────
 
 def _detect_missing_values(df: pd.DataFrame) -> list[Issue]:
     issues = []
     for col in df.columns:
-        mask = df[col].isna() | df[col].astype(str).str.strip().eq("")
+        mask = missing_mask(df[col])
         for idx in df.index[mask]:
             issues.append(Issue(
                 row_idx=idx, col=col,
                 issue_type="missing_value",
-                detail="Null, NaN, or empty string",
+                detail="Boş, null veya yalnızca boşluk karakteri",
                 value=df.at[idx, col],
             ))
     return issues
 
 
-# ── 2. Format Issues ───────────────────────────────────────────────
+# ── 2. Format Issues ──────────────────────────────────────────────
 
 def _detect_format_issues(df: pd.DataFrame, schema: dict[str, str]) -> list[Issue]:
     issues = []
@@ -82,51 +96,31 @@ def _detect_format_issues(df: pd.DataFrame, schema: dict[str, str]) -> list[Issu
         if col_type == "numerical":
             for idx in df.index:
                 val = df.at[idx, col]
-                if pd.isna(val):
+                if is_missing(val):
                     continue
-                if not _is_numeric(val):
+                if not is_numeric(val):
                     issues.append(Issue(
                         row_idx=idx, col=col,
                         issue_type="format_issue",
-                        detail=f"Non-numeric value in numeric column",
+                        detail="Sayısal kolonda sayısal olmayan değer",
                         value=val,
                     ))
         elif col_type == "date":
             for idx in df.index:
                 val = df.at[idx, col]
-                if pd.isna(val):
+                if is_missing(val):
                     continue
-                if not _is_parseable_date(val):
+                if not is_parseable_date(val):
                     issues.append(Issue(
                         row_idx=idx, col=col,
                         issue_type="format_issue",
-                        detail="Unparseable date value",
+                        detail="Tarih olarak ayrıştırılamayan değer",
                         value=val,
                     ))
     return issues
 
 
-def _is_numeric(val) -> bool:
-    if isinstance(val, (int, float, np.integer, np.floating)):
-        return True
-    try:
-        float(str(val).replace(",", "."))
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def _is_parseable_date(val) -> bool:
-    if isinstance(val, (pd.Timestamp,)):
-        return True
-    try:
-        pd.to_datetime(val)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-# ── 3. Data Type Drift ─────────────────────────────────────────────
+# ── 3. Data Type Drift (precision: only minority-type cells) ──────
 
 def _detect_type_drift(df: pd.DataFrame) -> list[Issue]:
     issues = []
@@ -134,32 +128,49 @@ def _detect_type_drift(df: pd.DataFrame) -> list[Issue]:
         non_null = df[col].dropna()
         if len(non_null) == 0:
             continue
-        types_found = set()
-        for val in non_null.head(500):
-            if isinstance(val, (int, np.integer)):
-                types_found.add("int")
-            elif isinstance(val, (float, np.floating)):
-                types_found.add("float")
-            elif isinstance(val, bool):
-                types_found.add("bool")
-            else:
-                types_found.add(type(val).__name__)
-        # int + float is acceptable, so only flag truly mixed types
-        normalized = types_found - {"int", "float"} if {"int", "float"}.issubset(types_found) else types_found
-        if len(normalized) > 1:
-            for idx in df.index:
-                val = df.at[idx, col]
-                if pd.notna(val):
-                    issues.append(Issue(
-                        row_idx=idx, col=col,
-                        issue_type="type_drift",
-                        detail=f"Mixed types in column: {types_found}",
-                        value=val,
-                    ))
+
+        # Classify each value's type
+        type_map: dict[int, str] = {}
+        type_counts: dict[str, int] = {}
+        for idx in non_null.index:
+            val = non_null.at[idx]
+            t = _classify_value_type(val)
+            type_map[idx] = t
+            type_counts[t] = type_counts.get(t, 0) + 1
+
+        # int + float together is acceptable
+        effective_types = set(type_counts.keys())
+        if effective_types == {"int", "float"}:
+            continue
+        if len(effective_types) <= 1:
+            continue
+
+        # Find the majority type
+        majority_type = max(type_counts, key=type_counts.get)
+
+        # Flag only minority-type cells
+        for idx, t in type_map.items():
+            if t != majority_type:
+                issues.append(Issue(
+                    row_idx=idx, col=col,
+                    issue_type="type_drift",
+                    detail=f"Beklenen tip '{majority_type}', bulunan '{t}' (kolonda karışık tipler: {set(type_counts.keys())})",
+                    value=df.at[idx, col],
+                ))
     return issues
 
 
-# ── 4. Semantic Inconsistency ──────────────────────────────────────
+def _classify_value_type(val) -> str:
+    if isinstance(val, bool):
+        return "bool"
+    if isinstance(val, (int, np.integer)):
+        return "int"
+    if isinstance(val, (float, np.floating)):
+        return "float"
+    return type(val).__name__
+
+
+# ── 4. Semantic Inconsistency (enhanced normalizer) ───────────────
 
 def _detect_semantic_inconsistency(df: pd.DataFrame, schema: dict[str, str]) -> list[Issue]:
     issues = []
@@ -169,82 +180,179 @@ def _detect_semantic_inconsistency(df: pd.DataFrame, schema: dict[str, str]) -> 
         non_null = df[col].dropna().astype(str)
         if len(non_null) == 0:
             continue
-        # Normalize: lowercase, strip, remove dots
-        normalized = non_null.str.lower().str.strip().str.replace(".", "", regex=False)
-        # Group originals by normalized form
+
+        # Deep normalize and group
         groups: dict[str, set] = {}
-        for orig, norm in zip(non_null, normalized):
+        idx_norm: dict[int, str] = {}
+        for idx, orig in zip(non_null.index, non_null):
+            norm = normalize_semantic(orig)
             groups.setdefault(norm, set()).add(orig)
+            idx_norm[idx] = norm
+
         # Flag groups with multiple representations
         flagged_norms = {norm for norm, variants in groups.items() if len(variants) > 1}
         if not flagged_norms:
             continue
+
         for idx in df.index:
             val = df.at[idx, col]
-            if pd.isna(val):
+            if is_missing(val):
                 continue
-            norm_val = str(val).lower().strip().replace(".", "")
-            if norm_val in flagged_norms:
+            norm_val = idx_norm.get(idx)
+            if norm_val and norm_val in flagged_norms:
                 variants = groups[norm_val]
                 issues.append(Issue(
                     row_idx=idx, col=col,
                     issue_type="semantic_inconsistency",
-                    detail=f"Multiple representations: {variants}",
+                    detail=f"Farklı yazım biçimleri: {variants}",
                     value=val,
                 ))
     return issues
 
 
-# ── 5. Duplicate Records ──────────────────────────────────────────
+# ── 5. Duplicate Records (full, key-based, fuzzy) ─────────────────
 
-def _detect_duplicates(df: pd.DataFrame) -> list[Issue]:
+def _detect_duplicates(
+    df: pd.DataFrame,
+    key_columns: list[str] | None = None,
+    fuzzy_threshold: float = 0.0,
+) -> list[Issue]:
     issues = []
+
+    # Full row duplicates
     dup_mask = df.duplicated(keep=False)
     for idx in df.index[dup_mask]:
         issues.append(Issue(
             row_idx=idx, col="__all__",
             issue_type="duplicate",
-            detail="Duplicate row",
+            detail="Tam satır tekrarı",
+        ))
+
+    # Key-based duplicates
+    if key_columns:
+        valid_keys = [k for k in key_columns if k in df.columns]
+        if valid_keys:
+            key_dup_mask = df.duplicated(subset=valid_keys, keep=False)
+            new_dups = key_dup_mask & ~dup_mask
+            key_label = ", ".join(valid_keys)
+            for idx in df.index[new_dups]:
+                issues.append(Issue(
+                    row_idx=idx, col="__all__",
+                    issue_type="duplicate",
+                    detail=f"Anahtar bazlı tekrar ({key_label})",
+                ))
+            # Update dup_mask to include key-based
+            dup_mask = dup_mask | key_dup_mask
+
+    # Fuzzy duplicate detection (string columns, pairwise on sample)
+    if fuzzy_threshold > 0:
+        issues.extend(_detect_fuzzy_duplicates(df, dup_mask, fuzzy_threshold))
+
+    return issues
+
+
+def _detect_fuzzy_duplicates(
+    df: pd.DataFrame,
+    already_flagged: pd.Series,
+    threshold: float,
+) -> list[Issue]:
+    """Compare rows using string similarity. Only checks non-flagged rows."""
+    issues = []
+    str_cols = df.select_dtypes(include="object").columns.tolist()
+    if not str_cols:
+        return issues
+
+    unflagged_idx = df.index[~already_flagged].tolist()
+    # Limit pairwise comparison to avoid O(n^2) explosion
+    sample = unflagged_idx[:2000]
+    if len(sample) < 2:
+        return issues
+
+    # Pre-build row strings
+    row_strs = {}
+    for idx in sample:
+        row_strs[idx] = " ".join(str(df.at[idx, c]) for c in str_cols)
+
+    flagged: set[int] = set()
+    for i in range(len(sample)):
+        if sample[i] in flagged:
+            continue
+        for j in range(i + 1, len(sample)):
+            if sample[j] in flagged:
+                continue
+            ratio = SequenceMatcher(None, row_strs[sample[i]], row_strs[sample[j]]).ratio()
+            if ratio >= threshold:
+                flagged.add(sample[i])
+                flagged.add(sample[j])
+                break
+
+    for idx in flagged:
+        issues.append(Issue(
+            row_idx=idx, col="__all__",
+            issue_type="duplicate",
+            detail=f"Bulanık eşleşme (benzerlik >= {threshold:.0%})",
         ))
     return issues
 
 
-# ── 6. Range Violations ───────────────────────────────────────────
+# ── 6. Range Violations (config-based) ────────────────────────────
 
-def _detect_range_violations(df: pd.DataFrame, schema: dict[str, str]) -> list[Issue]:
+def _load_range_rules(path: str | None = None) -> list[dict]:
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), "range_rules.yaml")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data.get("rules", [])
+    except (FileNotFoundError, yaml.YAMLError):
+        return []
+
+
+def _detect_range_violations(
+    df: pd.DataFrame,
+    schema: dict[str, str],
+    range_rules_path: str | None = None,
+) -> list[Issue]:
     issues = []
+    biz_rules = _load_range_rules(range_rules_path)
+
     for col, col_type in schema.items():
         if col_type != "numerical":
             continue
         numeric_col = pd.to_numeric(df[col], errors="coerce")
         if numeric_col.isna().all():
             continue
+
+        # Statistical outlier bounds (IQR)
         q1 = numeric_col.quantile(0.25)
         q3 = numeric_col.quantile(0.75)
         iqr = q3 - q1
-        lower = q1 - 3 * iqr
-        upper = q3 + 3 * iqr
+        stat_lower = q1 - 3 * iqr
+        stat_upper = q3 + 3 * iqr
+
+        # Find matching business rules from config
         col_lower = col.lower()
-        # Business rules for common patterns
-        biz_min, biz_max = None, None
-        if any(k in col_lower for k in ("age", "yas", "yaş")):
-            biz_min, biz_max = 0, 150
-        elif any(k in col_lower for k in ("percent", "yüzde", "oran", "rate")):
-            biz_min, biz_max = 0, 100
-        elif any(k in col_lower for k in ("price", "fiyat", "tutar", "amount")):
-            biz_min = 0
+        biz_min, biz_max, biz_label = None, None, None
+        for rule in biz_rules:
+            keywords = rule.get("keywords", [])
+            if any(kw in col_lower for kw in keywords):
+                biz_min = rule.get("min")
+                biz_max = rule.get("max")
+                biz_label = rule.get("label", "İş kuralı")
+                break
 
         for idx in df.index:
             val = numeric_col.at[idx]
             if pd.isna(val):
                 continue
             reason = None
-            if val < lower or val > upper:
-                reason = f"Statistical outlier (IQR): {val:.2f} outside [{lower:.2f}, {upper:.2f}]"
+            # Business rule takes priority
             if biz_min is not None and val < biz_min:
-                reason = f"Business rule violation: {val} < {biz_min}"
-            if biz_max is not None and val > biz_max:
-                reason = f"Business rule violation: {val} > {biz_max}"
+                reason = f"{biz_label}: {val} < {biz_min}"
+            elif biz_max is not None and val > biz_max:
+                reason = f"{biz_label}: {val} > {biz_max}"
+            elif val < stat_lower or val > stat_upper:
+                reason = f"İstatistiksel aykırı değer (IQR): {val:.2f} [{stat_lower:.2f}, {stat_upper:.2f}] dışında"
             if reason:
                 issues.append(Issue(
                     row_idx=idx, col=col,
@@ -259,14 +367,14 @@ def _detect_range_violations(df: pd.DataFrame, schema: dict[str, str]) -> list[I
 
 def _detect_sparse_columns(df: pd.DataFrame) -> list[Issue]:
     issues = []
-    threshold = 0.7  # 70% missing -> sparse
+    threshold = 0.7
     for col in df.columns:
-        missing_ratio = df[col].isna().sum() / len(df)
+        missing_ratio = missing_mask(df[col]).sum() / len(df)
         if missing_ratio >= threshold:
             issues.append(Issue(
                 row_idx=None, col=col,
                 issue_type="sparse_column",
-                detail=f"High missing ratio: {missing_ratio:.1%}",
+                detail=f"Yüksek boşluk oranı: {missing_ratio:.1%}",
             ))
     return issues
 
@@ -279,32 +387,29 @@ def _detect_meaningless_features(df: pd.DataFrame, schema: dict[str, str]) -> li
         non_null = df[col].dropna()
         if len(non_null) == 0:
             continue
-        # Constant column
         if non_null.nunique() == 1:
             issues.append(Issue(
                 row_idx=None, col=col,
                 issue_type="meaningless_feature",
-                detail=f"Constant column (single value: {non_null.iloc[0]})",
+                detail=f"Sabit kolon (tek değer: {non_null.iloc[0]})",
             ))
             continue
-        # ID-like: all unique values
         if non_null.nunique() == len(non_null) and len(non_null) > 10:
             col_lower = col.lower()
             if any(k in col_lower for k in ("id", "index", "key", "uuid", "guid", "no")):
                 issues.append(Issue(
                     row_idx=None, col=col,
                     issue_type="meaningless_feature",
-                    detail="ID-like column (all unique values)",
+                    detail="ID benzeri kolon (tüm değerler benzersiz)",
                 ))
                 continue
-        # High cardinality categorical
         if schema.get(col) == "categorical":
             ratio = non_null.nunique() / len(non_null)
             if ratio > 0.9 and len(non_null) > 20:
                 issues.append(Issue(
                     row_idx=None, col=col,
                     issue_type="meaningless_feature",
-                    detail=f"High cardinality categorical ({non_null.nunique()} unique / {len(non_null)} rows)",
+                    detail=f"Yüksek kardinalite ({non_null.nunique()} benzersiz / {len(non_null)} satır)",
                 ))
     return issues
 
@@ -326,35 +431,66 @@ def _detect_user_rule_violations(df: pd.DataFrame, rules: dict) -> list[Issue]:
         }
     }
     """
-    import re
     issues = []
     for col, rule in rules.items():
         if col not in df.columns:
             continue
+
+        # dtype check
+        if "dtype" in rule:
+            expected = rule["dtype"]
+            for idx in df.index:
+                val = df.at[idx, col]
+                if is_missing(val):
+                    continue
+                mismatch = False
+                if expected == "int":
+                    if not isinstance(val, (int, np.integer)):
+                        try:
+                            f = float(str(val))
+                            mismatch = f != int(f)
+                        except (ValueError, TypeError):
+                            mismatch = True
+                elif expected == "float":
+                    if not isinstance(val, (int, float, np.integer, np.floating)):
+                        try:
+                            float(str(val).replace(",", "."))
+                        except (ValueError, TypeError):
+                            mismatch = True
+                elif expected == "date":
+                    if not is_parseable_date(val):
+                        mismatch = True
+                elif expected == "string":
+                    if not isinstance(val, str):
+                        mismatch = True
+                if mismatch:
+                    issues.append(Issue(idx, col, "format_issue",
+                                        f"Beklenen tip '{expected}', bulunan: {type(val).__name__}", val))
+
         for idx in df.index:
             val = df.at[idx, col]
-            if pd.isna(val):
+            if is_missing(val):
                 continue
             str_val = str(val)
 
             if "regex" in rule:
                 if not re.match(rule["regex"], str_val):
                     issues.append(Issue(idx, col, "format_issue",
-                                        f"Regex mismatch: {rule['regex']}", val))
+                                        f"Regex uyumsuzluğu: {rule['regex']}", val))
 
             if "min_length" in rule and len(str_val) < rule["min_length"]:
                 issues.append(Issue(idx, col, "format_issue",
-                                    f"Too short: {len(str_val)} < {rule['min_length']}", val))
+                                    f"Çok kısa: {len(str_val)} < {rule['min_length']}", val))
 
             if "max_length" in rule and len(str_val) > rule["max_length"]:
                 issues.append(Issue(idx, col, "format_issue",
-                                    f"Too long: {len(str_val)} > {rule['max_length']}", val))
+                                    f"Çok uzun: {len(str_val)} > {rule['max_length']}", val))
 
             if "min_value" in rule:
                 try:
                     if float(str_val) < rule["min_value"]:
                         issues.append(Issue(idx, col, "range_violation",
-                                            f"Below minimum: {val} < {rule['min_value']}", val))
+                                            f"Minimum altında: {val} < {rule['min_value']}", val))
                 except ValueError:
                     pass
 
@@ -362,12 +498,12 @@ def _detect_user_rule_violations(df: pd.DataFrame, rules: dict) -> list[Issue]:
                 try:
                     if float(str_val) > rule["max_value"]:
                         issues.append(Issue(idx, col, "range_violation",
-                                            f"Above maximum: {val} > {rule['max_value']}", val))
+                                            f"Maksimum üstünde: {val} > {rule['max_value']}", val))
                 except ValueError:
                     pass
 
             if "allowed_values" in rule:
                 if val not in rule["allowed_values"] and str_val not in rule["allowed_values"]:
                     issues.append(Issue(idx, col, "format_issue",
-                                        f"Value not in allowed list: {val}", val))
+                                        f"İzin verilen listede yok: {val}", val))
     return issues

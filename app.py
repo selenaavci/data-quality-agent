@@ -7,6 +7,7 @@ from engine.schema_detector import detect_schema
 from engine.issue_detector import detect_all_issues, ISSUE_TYPES, ISSUE_COLORS, Issue
 from engine.risk_scorer import score_issues, RISK_LEVELS, RISK_COLORS
 from engine.excel_exporter import export_to_excel
+from engine.aggregator import aggregate_issues
 
 # ── Page Config ────────────────────────────────────────────────────
 
@@ -242,12 +243,38 @@ for rule in st.session_state.user_rules_list:
         user_rules[col] = {}
     user_rules[col][rule["rule_key"]] = rule["value"]
 
+# ── Key-Based Duplicate Detection ──────────────────────────────────
+
+st.markdown("---")
+st.markdown("### Tekrar Kontrolü (Anahtar Bazlı)")
+st.caption("Tam satır tekrarları otomatik tespit edilir. Ek olarak belirli kolonlara göre tekrar araması yapabilirsiniz.")
+
+duplicate_keys = st.multiselect(
+    "Tekrar kontrolü için anahtar kolonları seçin (opsiyonel)",
+    options=list(df.columns),
+    default=[],
+    key="dup_keys",
+)
+
+fuzzy_threshold = st.slider(
+    "Bulanık eşleşme benzerlik eşiği (0 = kapalı)",
+    min_value=0.0, max_value=1.0, value=0.0, step=0.05,
+    help="Metin kolonlarında satırlar arası benzerlik oranı. 0.85+ önerilir. 0 = bulanık eşleşme kapalı.",
+    key="fuzzy_thresh",
+)
+
 # ── Run Analysis ───────────────────────────────────────────────────
 
 with st.spinner("Analiz ediliyor..."):
     schema = detect_schema(df)
-    issues = detect_all_issues(df, schema, user_rules if user_rules else None)
+    issues = detect_all_issues(
+        df, schema,
+        user_rules if user_rules else None,
+        duplicate_keys if duplicate_keys else None,
+        fuzzy_threshold=fuzzy_threshold,
+    )
     row_risks = score_issues(issues, df)
+    summary = aggregate_issues(issues, row_risks, len(df))
 
 # ── Analysis Results ───────────────────────────────────────────────
 
@@ -283,6 +310,27 @@ for col_widget, level in zip([rc1, rc2, rc3, rc4], RISK_LEVELS):
             f'<div class="metric-label">{level}</div></div>',
             unsafe_allow_html=True,
         )
+
+# ── Aggregated Breakdown ───────────────────────────────────────────
+
+agg_col1, agg_col2 = st.columns(2)
+with agg_col1:
+    st.markdown("**Sorun Tipine Göre Dağılım**")
+    if summary.issues_by_type:
+        type_df = pd.DataFrame([
+            {"Sorun Tipi": ISSUE_TYPES.get(k, k), "Adet": v}
+            for k, v in summary.issues_by_type.items()
+        ])
+        st.dataframe(type_df, use_container_width=True, hide_index=True)
+
+with agg_col2:
+    st.markdown("**En Sorunlu Kolonlar (Top 10)**")
+    if summary.top_risky_columns:
+        risky_df = pd.DataFrame([
+            {"Kolon": col, "Sorun Sayısı": cnt, "En Yüksek Risk": risk}
+            for col, cnt, risk in summary.top_risky_columns
+        ])
+        st.dataframe(risky_df, use_container_width=True, hide_index=True)
 
 # ── Schema Info ────────────────────────────────────────────────────
 
@@ -337,7 +385,7 @@ else:
                         "Kolon": i.col,
                         "Değer": str(i.value) if i.value is not None else "",
                         "Detay": i.detail,
-                        "Risk": getattr(i, "risk", ""),
+                        "Risk": i.risk or "",
                     }
                     for i in sample
                 ])

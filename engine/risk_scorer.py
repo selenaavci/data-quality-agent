@@ -75,7 +75,8 @@ def _compute_risk(issue: Issue, df: pd.DataFrame) -> str:
         risk_val = max(risk_val, _RISK_ORDER["CRITICAL"])
 
     elif issue.issue_type == "range_violation":
-        if issue.detail and "Business rule" in issue.detail:
+        if issue.detail and "İstatistiksel" not in issue.detail:
+            # Config-based or user-defined business rule -> escalate
             risk_val = max(risk_val, _RISK_ORDER["CRITICAL"])
 
     elif issue.issue_type == "sparse_column":
