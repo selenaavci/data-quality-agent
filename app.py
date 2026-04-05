@@ -46,10 +46,10 @@ st.markdown("""
         opacity: 0.6;
         margin-top: 0.3rem;
     }
-    .risk-critical { color: #C0392B; font-weight: 700; }
-    .risk-high { color: #E74C3C; font-weight: 700; }
-    .risk-medium { color: #E67E22; font-weight: 600; }
-    .risk-low { color: #27AE60; }
+    .risk-kritik { color: #C0392B; font-weight: 700; }
+    .risk-yüksek { color: #E74C3C; font-weight: 700; }
+    .risk-orta { color: #E67E22; font-weight: 600; }
+    .risk-düşük { color: #27AE60; }
     .issue-badge {
         display: inline-block;
         padding: 4px 12px;
@@ -82,14 +82,14 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Risk Seviyeleri")
     risk_desc = {
-        "LOW": "Küçük sorun, düşük etki",
-        "MEDIUM": "Dikkat gerektirir ama kritik değil",
-        "HIGH": "Analiz üzerinde güçlü etki",
-        "CRITICAL": "Modelleme öncesi mutlaka düzeltilmeli",
+        "Düşük": "Küçük sorun, düşük etki",
+        "Orta": "Dikkat gerektirir ama kritik değil",
+        "Yüksek": "Analiz üzerinde güçlü etki",
+        "Kritik": "Modelleme öncesi mutlaka düzeltilmeli",
     }
     for level, desc in risk_desc.items():
         color = RISK_COLORS[level]
-        text_color = "#1a1a1a" if level in ("LOW", "MEDIUM") else "#ffffff"
+        text_color = "#1a1a1a" if level in ("Düşük", "Orta") else "#ffffff"
         st.markdown(
             f'<span style="background-color:#{color}; color:{text_color}; '
             f'padding:4px 12px; border-radius:4px; font-weight:600;">{level}</span> — {desc}',
@@ -256,13 +256,6 @@ duplicate_keys = st.multiselect(
     key="dup_keys",
 )
 
-fuzzy_threshold = st.slider(
-    "Bulanık eşleşme benzerlik eşiği (0 = kapalı)",
-    min_value=0.0, max_value=1.0, value=0.0, step=0.05,
-    help="Metin kolonlarında satırlar arası benzerlik oranı. 0.85+ önerilir. 0 = bulanık eşleşme kapalı.",
-    key="fuzzy_thresh",
-)
-
 # ── Run Analysis ───────────────────────────────────────────────────
 
 with st.spinner("Analiz ediliyor..."):
@@ -271,7 +264,6 @@ with st.spinner("Analiz ediliyor..."):
         df, schema,
         user_rules if user_rules else None,
         duplicate_keys if duplicate_keys else None,
-        fuzzy_threshold=fuzzy_threshold,
     )
     row_risks = score_issues(issues, df)
     summary = aggregate_issues(issues, row_risks, len(df))

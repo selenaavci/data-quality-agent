@@ -47,11 +47,11 @@ def aggregate_issues(
     col_risks: dict[str, list[str]] = {}
     for issue in issues:
         col = issue.col if issue.col != "__all__" else "(tüm satır)"
-        risk = getattr(issue, "risk", None)
+        risk = issue.risk
         if risk:
             col_risks.setdefault(col, []).append(risk)
 
-    risk_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    risk_order = {"Düşük": 0, "Orta": 1, "Yüksek": 2, "Kritik": 3}
     top_risky: list[tuple[str, int, str]] = []
     for col, risks in col_risks.items():
         worst = max(risks, key=lambda r: risk_order.get(r, 0))
