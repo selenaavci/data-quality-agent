@@ -330,12 +330,12 @@ def _detect_range_violations(
         stat_lower = q1 - 3 * iqr
         stat_upper = q3 + 3 * iqr
 
-        # Find matching business rules from config
+        # Find matching business rules from config (whole-word match)
         col_lower = col.lower()
         biz_min, biz_max, biz_label = None, None, None
         for rule in biz_rules:
             keywords = rule.get("keywords", [])
-            if any(kw in col_lower for kw in keywords):
+            if any(re.search(rf'\b{re.escape(kw)}\b', col_lower) for kw in keywords):
                 biz_min = rule.get("min")
                 biz_max = rule.get("max")
                 biz_label = rule.get("label", "İş kuralı")
