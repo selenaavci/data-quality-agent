@@ -8,6 +8,7 @@ from engine.issue_detector import detect_all_issues, ISSUE_TYPES, ISSUE_COLORS, 
 from engine.risk_scorer import score_issues, RISK_LEVELS, RISK_COLORS
 from engine.excel_exporter import export_to_excel
 from engine.aggregator import aggregate_issues
+from engine.utils import standardize_dataframe
 
 # ── Page Config ────────────────────────────────────────────────────
 
@@ -270,17 +271,37 @@ duplicate_keys = st.multiselect(
     key="dup_keys",
 )
 
+# ── Standardization Option ─────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("### Veri Standardizasyonu")
+standardize = st.checkbox(
+    "Analiz öncesinde veriyi standardize et",
+    value=False,
+    help="Metin ve kategorik kolonlardaki yazım farklılıklarını (büyük/küçük harf, boşluklar) düzeltir. "
+         "Örn: 'istanbul' → 'Istanbul', 'ayşe kaya' → 'Ayşe Kaya'. "
+         "Bu seçenek açıkken tutarsız yazım sorunları büyük ölçüde azalır.",
+)
+if standardize:
+    st.info("Veri standardize edilerek analiz edilecektir. Metin/kategorik kolonlarda büyük-küçük harf ve boşluk düzeltmesi uygulanır.")
+
 # ── Run Analysis ───────────────────────────────────────────────────
 
 with st.spinner("Analiz ediliyor..."):
     schema = detect_schema(df)
+    analysis_df = standardize_dataframe(df, schema) if standardize else df
     issues = detect_all_issues(
-        df, schema,
+        analysis_df, schema,
         user_rules if user_rules else None,
         duplicate_keys if duplicate_keys else None,
     )
-    row_risks = score_issues(issues, df)
-    summary = aggregate_issues(issues, row_risks, len(df))
+    row_risks = score_issues(issues, analysis_df)
+    summary = aggregate_issues(issues, row_risks, len(analysis_df))
+
+# Show standardized preview if enabled
+if standardize:
+    with st.expander("Standardize Edilmiş Veri Önizleme", expanded=False):
+        st.dataframe(analysis_df.head(100), use_container_width=True)
 
 # ── Analysis Results ───────────────────────────────────────────────
 
@@ -466,7 +487,7 @@ if col_issues:
 st.markdown("---")
 st.markdown("### Excel Çıktısı")
 
-excel_buf = export_to_excel(df, issues, row_risks)
+excel_buf = export_to_excel(analysis_df, issues, row_risks)
 st.download_button(
     label="Excel Dosyasını İndir",
     data=excel_buf,

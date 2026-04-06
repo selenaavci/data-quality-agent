@@ -78,8 +78,13 @@ def detect_all_issues(
 
 def _detect_missing_values(df: pd.DataFrame) -> list[Issue]:
     issues = []
+    sparse_threshold = 0.7
     for col in df.columns:
         mask = missing_mask(df[col])
+        missing_ratio = mask.sum() / len(df) if len(df) > 0 else 0
+        # Skip columns that are sparse — those are handled by sparse_column detector
+        if missing_ratio >= sparse_threshold:
+            continue
         for idx in df.index[mask]:
             issues.append(Issue(
                 row_idx=idx, col=col,

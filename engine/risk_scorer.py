@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 from .issue_detector import Issue
+from .utils import missing_mask
 
 RISK_LEVELS = ("Düşük", "Orta", "Yüksek", "Kritik")
 
@@ -65,10 +66,10 @@ def _compute_risk(issue: Issue, df: pd.DataFrame) -> str:
     # Escalation rules
     if issue.issue_type == "missing_value":
         col = issue.col
-        missing_ratio = df[col].isna().sum() / len(df)
-        if missing_ratio > 0.5:
+        miss_ratio = missing_mask(df[col]).sum() / len(df) if len(df) > 0 else 0
+        if miss_ratio > 0.5:
             risk_val = max(risk_val, _RISK_ORDER["Kritik"])
-        elif missing_ratio > 0.3:
+        elif miss_ratio > 0.3:
             risk_val = max(risk_val, _RISK_ORDER["Yüksek"])
 
     elif issue.issue_type == "format_issue":
@@ -83,8 +84,8 @@ def _compute_risk(issue: Issue, df: pd.DataFrame) -> str:
 
     elif issue.issue_type == "sparse_column":
         col = issue.col
-        missing_ratio = df[col].isna().sum() / len(df)
-        if missing_ratio > 0.9:
+        miss_ratio = missing_mask(df[col]).sum() / len(df) if len(df) > 0 else 0
+        if miss_ratio > 0.9:
             risk_val = max(risk_val, _RISK_ORDER["Yüksek"])
 
     # Map back to label

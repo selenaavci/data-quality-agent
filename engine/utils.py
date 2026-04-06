@@ -105,3 +105,65 @@ def normalize_semantic(text: str) -> str:
     # Expand abbreviations
     tokens = [_ABBREVIATION_MAP.get(t, t) for t in tokens]
     return " ".join(tokens)
+
+
+# ── Data Standardization ─────────────────────────────────────────
+
+def standardize_dataframe(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
+    """
+    Standardize text/categorical columns:
+    - Strip whitespace, collapse multiple spaces
+    - Group semantically identical values and replace all with the most common form
+      e.g. İstanbul/istanbul/ISTANBUL/ist. → İstanbul (whichever appears most)
+    """
+    out = df.copy()
+
+    for col in out.columns:
+        col_type = schema.get(col)
+        if col_type not in ("categorical", "text"):
+            continue
+
+        series = out[col]
+        str_mask = series.apply(lambda v: isinstance(v, str))
+        if not str_mask.any():
+            continue
+
+        # Step 1: basic cleanup
+        def _clean(val):
+            if not isinstance(val, str):
+                return val
+            val = val.strip()
+            val = " ".join(val.split())
+            return val
+
+        out[col] = series.apply(_clean)
+
+        # Step 2: semantic grouping — replace all variants with the most common form
+        non_null = out[col].dropna()
+        non_empty = non_null[non_null.astype(str).str.strip() != ""]
+        if len(non_empty) == 0:
+            continue
+
+        # Build semantic groups: normalized_form -> {original: count}
+        groups: dict[str, dict[str, int]] = {}
+        for val in non_empty:
+            s = str(val)
+            norm = normalize_semantic(s)
+            groups.setdefault(norm, {})
+            groups[norm][s] = groups[norm].get(s, 0) + 1
+
+        # Build replacement map: variant -> most common form in its group
+        replacement: dict[str, str] = {}
+        for norm, variants in groups.items():
+            if len(variants) <= 1:
+                continue
+            # pick the most frequent form
+            canonical = max(variants, key=variants.get)
+            for variant in variants:
+                if variant != canonical:
+                    replacement[variant] = canonical
+
+        if replacement:
+            out[col] = out[col].apply(lambda v: replacement.get(str(v), v) if isinstance(v, str) else v)
+
+    return out
