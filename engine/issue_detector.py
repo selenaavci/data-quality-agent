@@ -45,6 +45,8 @@ class Issue:
     detail: str
     value: object = None
     risk: str | None = None
+    user_risk: str | None = None      # Risk level set by user-defined rule
+    rule_label: str | None = None     # Label of the user-defined rule that generated this issue
 
 
 # ── Public API ─────────────────────────────────────────────────────
@@ -421,24 +423,32 @@ def _detect_user_rule_violations(df: pd.DataFrame, rules: dict) -> list[Issue]:
     rules format:
     {
         "column_name": {
-            "dtype": "int" | "float" | "date" | "string",
-            "regex": "pattern",
-            "min_length": 3,
-            "max_length": 50,
-            "min_value": 0,
-            "max_value": 100,
-            "allowed_values": ["A", "B", "C"],
+            "rule_key": {"value": ..., "risk": "Düşük"|"Orta"|"Yüksek"|"Kritik", "label": "..."},
+            ...
         }
     }
     """
     issues = []
-    for col, rule in rules.items():
+    for col, col_rules in rules.items():
         if col not in df.columns:
             continue
 
+        def _extract(key):
+            """Extract value, risk, label from a rule entry."""
+            entry = col_rules.get(key)
+            if entry is None:
+                return None, None, None
+            if isinstance(entry, dict) and "value" in entry:
+                return entry["value"], entry.get("risk"), entry.get("label")
+            return entry, None, None
+
+        def _make_issue(idx, col, issue_type, detail, val, risk, label):
+            return Issue(idx, col, issue_type, detail, val, user_risk=risk, rule_label=label)
+
         # dtype check
-        if "dtype" in rule:
-            expected = rule["dtype"]
+        dtype_val, dtype_risk, dtype_label = _extract("dtype")
+        if dtype_val is not None:
+            expected = dtype_val
             for idx in df.index:
                 val = df.at[idx, col]
                 if is_missing(val):
@@ -464,8 +474,16 @@ def _detect_user_rule_violations(df: pd.DataFrame, rules: dict) -> list[Issue]:
                     if not isinstance(val, str):
                         mismatch = True
                 if mismatch:
-                    issues.append(Issue(idx, col, "format_issue",
-                                        f"Beklenen tip '{expected}', bulunan: {type(val).__name__}", val))
+                    issues.append(_make_issue(idx, col, "format_issue",
+                                        f"Beklenen tip '{expected}', bulunan: {type(val).__name__}", val,
+                                        dtype_risk, dtype_label))
+
+        regex_val, regex_risk, regex_label = _extract("regex")
+        min_len_val, min_len_risk, min_len_label = _extract("min_length")
+        max_len_val, max_len_risk, max_len_label = _extract("max_length")
+        min_v_val, min_v_risk, min_v_label = _extract("min_value")
+        max_v_val, max_v_risk, max_v_label = _extract("max_value")
+        allowed_val, allowed_risk, allowed_label = _extract("allowed_values")
 
         for idx in df.index:
             val = df.at[idx, col]
@@ -473,37 +491,43 @@ def _detect_user_rule_violations(df: pd.DataFrame, rules: dict) -> list[Issue]:
                 continue
             str_val = str(val)
 
-            if "regex" in rule:
-                if not re.match(rule["regex"], str_val):
-                    issues.append(Issue(idx, col, "format_issue",
-                                        f"Regex uyumsuzluğu: {rule['regex']}", val))
+            if regex_val is not None:
+                if not re.match(regex_val, str_val):
+                    issues.append(_make_issue(idx, col, "format_issue",
+                                        f"Regex uyumsuzluğu: {regex_val}", val,
+                                        regex_risk, regex_label))
 
-            if "min_length" in rule and len(str_val) < rule["min_length"]:
-                issues.append(Issue(idx, col, "format_issue",
-                                    f"Çok kısa: {len(str_val)} < {rule['min_length']}", val))
+            if min_len_val is not None and len(str_val) < min_len_val:
+                issues.append(_make_issue(idx, col, "format_issue",
+                                    f"Çok kısa: {len(str_val)} < {min_len_val}", val,
+                                    min_len_risk, min_len_label))
 
-            if "max_length" in rule and len(str_val) > rule["max_length"]:
-                issues.append(Issue(idx, col, "format_issue",
-                                    f"Çok uzun: {len(str_val)} > {rule['max_length']}", val))
+            if max_len_val is not None and len(str_val) > max_len_val:
+                issues.append(_make_issue(idx, col, "format_issue",
+                                    f"Çok uzun: {len(str_val)} > {max_len_val}", val,
+                                    max_len_risk, max_len_label))
 
-            if "min_value" in rule:
+            if min_v_val is not None:
                 try:
-                    if float(str_val) < rule["min_value"]:
-                        issues.append(Issue(idx, col, "range_violation",
-                                            f"Minimum altında: {val} < {rule['min_value']}", val))
+                    if float(str_val) < min_v_val:
+                        issues.append(_make_issue(idx, col, "range_violation",
+                                            f"Minimum altında: {val} < {min_v_val}", val,
+                                            min_v_risk, min_v_label))
                 except ValueError:
                     pass
 
-            if "max_value" in rule:
+            if max_v_val is not None:
                 try:
-                    if float(str_val) > rule["max_value"]:
-                        issues.append(Issue(idx, col, "range_violation",
-                                            f"Maksimum üstünde: {val} > {rule['max_value']}", val))
+                    if float(str_val) > max_v_val:
+                        issues.append(_make_issue(idx, col, "range_violation",
+                                            f"Maksimum üstünde: {val} > {max_v_val}", val,
+                                            max_v_risk, max_v_label))
                 except ValueError:
                     pass
 
-            if "allowed_values" in rule:
-                if val not in rule["allowed_values"] and str_val not in rule["allowed_values"]:
-                    issues.append(Issue(idx, col, "format_issue",
-                                        f"İzin verilen listede yok: {val}", val))
+            if allowed_val is not None:
+                if val not in allowed_val and str_val not in allowed_val:
+                    issues.append(_make_issue(idx, col, "format_issue",
+                                        f"İzin verilen listede yok: {val}", val,
+                                        allowed_risk, allowed_label))
     return issues

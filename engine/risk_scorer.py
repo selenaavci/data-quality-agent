@@ -43,7 +43,11 @@ def score_issues(issues: list[Issue], df: pd.DataFrame) -> dict[int | None, str]
     row_risks: dict[int | None, str] = {}
 
     for issue in issues:
-        risk = _compute_risk(issue, df)
+        # User-defined risk takes priority over computed risk
+        if issue.user_risk and issue.user_risk in _RISK_ORDER:
+            risk = issue.user_risk
+        else:
+            risk = _compute_risk(issue, df)
         issue.risk = risk
         key = issue.row_idx
         if key is not None:

@@ -169,11 +169,13 @@ if "user_rules_list" not in st.session_state:
 
 # Add rule form
 with st.expander("Yeni Kural Ekle", expanded=False):
-    rc1, rc2 = st.columns(2)
+    rc1, rc2, rc3 = st.columns(3)
     with rc1:
         selected_col = st.selectbox("Kolon", options=list(df.columns), key="rule_col")
     with rc2:
         selected_rule_label = st.selectbox("Kural Tipi", options=list(RULE_TYPE_OPTIONS.keys()), key="rule_type")
+    with rc3:
+        selected_risk_level = st.selectbox("Risk Seviyesi", options=list(RISK_LEVELS), key="rule_risk_level")
 
     selected_rule_key = RULE_TYPE_OPTIONS[selected_rule_label]
 
@@ -215,6 +217,7 @@ with st.expander("Yeni Kural Ekle", expanded=False):
                 "rule_key": selected_rule_key,
                 "rule_label": selected_rule_label,
                 "value": rule_value,
+                "risk_level": selected_risk_level,
             })
             st.rerun()
         else:
@@ -229,7 +232,14 @@ if st.session_state.user_rules_list:
             display_val = rule["value"]
             if isinstance(display_val, list):
                 display_val = ", ".join(display_val)
-            st.markdown(f"`{rule['col']}` — **{rule['rule_label']}**: `{display_val}`")
+            risk_lbl = rule.get("risk_level", "Orta")
+            risk_color = RISK_COLORS.get(risk_lbl, "F5C242")
+            st.markdown(
+                f'`{rule["col"]}` — **{rule["rule_label"]}**: `{display_val}` '
+                f'<span style="background-color:#{risk_color}; color:{"#fff" if risk_lbl in ("Yüksek","Kritik") else "#1a1a1a"}; '
+                f'padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">{risk_lbl}</span>',
+                unsafe_allow_html=True,
+            )
         with rc2:
             if st.button("Sil", key=f"del_rule_{i}"):
                 st.session_state.user_rules_list.pop(i)
@@ -241,7 +251,11 @@ for rule in st.session_state.user_rules_list:
     col = rule["col"]
     if col not in user_rules:
         user_rules[col] = {}
-    user_rules[col][rule["rule_key"]] = rule["value"]
+    user_rules[col][rule["rule_key"]] = {
+        "value": rule["value"],
+        "risk": rule.get("risk_level", "Orta"),
+        "label": f"{rule['rule_label']} ({rule['col']})",
+    }
 
 # ── Key-Based Duplicate Detection ──────────────────────────────────
 
@@ -385,6 +399,53 @@ else:
                 if len(row_level) > 200:
                     st.caption(f"İlk 200 sorun gösteriliyor. Toplam: {len(row_level)}")
 
+# ── User-Defined Rule Results ──────────────────────────────────────
+
+user_rule_issues = [i for i in issues if i.rule_label is not None]
+if user_rule_issues:
+    st.markdown("---")
+    st.markdown("### Kullanıcı Kuralı Sonuçları")
+    st.caption("Aşağıda yalnızca sizin tanımladığınız kurallara ait ihlaller gösterilmektedir.")
+
+    # Group by rule_label
+    rule_groups: dict[str, list[Issue]] = {}
+    for ui in user_rule_issues:
+        rule_groups.setdefault(ui.rule_label, []).append(ui)
+
+    rule_tabs = st.tabs([f"{label} ({len(group)})" for label, group in rule_groups.items()])
+    for rtab, (label, group) in zip(rule_tabs, rule_groups.items()):
+        with rtab:
+            # Show risk level badge
+            sample_risk = group[0].risk or group[0].user_risk or "Orta"
+            risk_color = RISK_COLORS.get(sample_risk, "F5C242")
+            text_color = "#fff" if sample_risk in ("Yüksek", "Kritik") else "#1a1a1a"
+            st.markdown(
+                f'<span style="background-color:#{risk_color}; color:{text_color}; '
+                f'padding:4px 12px; border-radius:6px; font-weight:600;">'
+                f'Risk: {sample_risk}</span> &nbsp; Toplam ihlal: **{len(group)}**',
+                unsafe_allow_html=True,
+            )
+            st.write("")
+
+            sample = group[:200]
+            rule_detail_df = pd.DataFrame([
+                {
+                    "Satır": i.row_idx,
+                    "Kolon": i.col,
+                    "Değer": str(i.value) if i.value is not None else "",
+                    "Detay": i.detail,
+                    "Risk": i.risk or "",
+                }
+                for i in sample
+            ])
+            st.dataframe(rule_detail_df, use_container_width=True, hide_index=True)
+            if len(group) > 200:
+                st.caption(f"İlk 200 ihlal gösteriliyor. Toplam: {len(group)}")
+elif st.session_state.user_rules_list:
+    st.markdown("---")
+    st.markdown("### Kullanıcı Kuralı Sonuçları")
+    st.success("Tanımlanan kurallara ait hiçbir ihlal tespit edilmedi.")
+
 # ── Column-Level Issues Summary ────────────────────────────────────
 
 if col_issues:
@@ -405,16 +466,16 @@ if col_issues:
 st.markdown("---")
 st.markdown("### Excel Çıktısı")
 
+excel_buf = export_to_excel(df, issues, row_risks)
+st.download_button(
+    label="Excel Dosyasını İndir",
+    data=excel_buf,
+    file_name="data_quality_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    type="primary",
+    use_container_width=True,
+)
 if issues:
-    excel_buf = export_to_excel(df, issues, row_risks)
-    st.download_button(
-        label="Excel Dosyasını İndir",
-        data=excel_buf,
-        file_name="data_quality_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
-    st.caption("Excel dosyasında sorunlu hücreler renk kodlu, Risk kolonu ise risk seviyesine göre renklendirilmiştir.")
+    st.caption("Excel dosyasında tüm veriler yer almaktadır. Sorunlu hücreler renk kodlu, Risk kolonu risk seviyesine göre renklendirilmiştir.")
 else:
-    st.info("Sorun tespit edilmediği için Excel raporu oluşturulmadı.")
+    st.caption("Sorun tespit edilmedi. Excel dosyası orijinal verinin tamamını içermektedir.")
