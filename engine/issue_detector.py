@@ -95,10 +95,31 @@ def _detect_missing_values(df: pd.DataFrame) -> list[Issue]:
     return issues
 
 
-# ── 2. Format Issues ──────────────────────────────────────────────
+# ── 2. Format Issues (pattern inconsistency) ────────────────────
+
+# Common garbage / placeholder patterns
+_GARBAGE_RE = re.compile(
+    r'^[#@!?\-.,;:_*~^]{2,}$'   # repeated symbols: ###, ---, ???, !!!
+    r'|^#+$'                      # only hashes
+    r'|^\?+/?.*\?+$'             # ??/?? patterns
+    r'|^N/?A$'                    # N/A, NA
+    r'|^null$|^none$|^nil$'      # null literals
+    r'|^#(DEĞER|REF|ADI|BOŞ|SAYI)!?$'  # Excel error codes
+    r'|^TBD$|^TODO$'             # placeholders
+    , re.IGNORECASE
+)
+
 
 def _detect_format_issues(df: pd.DataFrame, schema: dict[str, str]) -> list[Issue]:
+    """
+    Detect values that break the dominant pattern of a column.
+    - Numeric column with non-numeric text → semantic_inconsistency
+    - Date column with non-parseable text → semantic_inconsistency
+    - Any column with garbage/placeholder values → semantic_inconsistency
+    """
     issues = []
+    flagged: set[tuple[int, str]] = set()  # track (row_idx, col) to avoid duplicates
+
     for col, col_type in schema.items():
         if col_type == "numerical":
             for idx in df.index:
@@ -108,10 +129,11 @@ def _detect_format_issues(df: pd.DataFrame, schema: dict[str, str]) -> list[Issu
                 if not is_numeric(val):
                     issues.append(Issue(
                         row_idx=idx, col=col,
-                        issue_type="format_issue",
-                        detail="Sayısal kolonda sayısal olmayan değer",
+                        issue_type="semantic_inconsistency",
+                        detail=f"Sayısal kolonda tutarsız değer: '{val}'",
                         value=val,
                     ))
+                    flagged.add((idx, col))
         elif col_type == "date":
             for idx in df.index:
                 val = df.at[idx, col]
@@ -120,10 +142,29 @@ def _detect_format_issues(df: pd.DataFrame, schema: dict[str, str]) -> list[Issu
                 if not is_parseable_date(val):
                     issues.append(Issue(
                         row_idx=idx, col=col,
-                        issue_type="format_issue",
-                        detail="Tarih olarak ayrıştırılamayan değer",
+                        issue_type="semantic_inconsistency",
+                        detail=f"Tarih kolonda tutarsız değer: '{val}'",
                         value=val,
                     ))
+                    flagged.add((idx, col))
+
+    # Garbage / placeholder detection across ALL columns
+    for col in df.columns:
+        for idx in df.index:
+            if (idx, col) in flagged:
+                continue
+            val = df.at[idx, col]
+            if is_missing(val):
+                continue
+            s = str(val).strip()
+            if _GARBAGE_RE.match(s):
+                issues.append(Issue(
+                    row_idx=idx, col=col,
+                    issue_type="semantic_inconsistency",
+                    detail=f"Anlamsız/yer tutucu değer: '{s}'",
+                    value=val,
+                ))
+
     return issues
 
 

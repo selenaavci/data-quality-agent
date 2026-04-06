@@ -75,6 +75,13 @@ def _compute_risk(issue: Issue, df: pd.DataFrame) -> str:
     elif issue.issue_type == "format_issue":
         risk_val = max(risk_val, _RISK_ORDER["Yüksek"])
 
+    elif issue.issue_type == "semantic_inconsistency":
+        # Pattern-breaking values in numeric/date columns are higher risk
+        if issue.detail and ("Sayısal kolonda" in issue.detail or
+                             "Tarih kolonda" in issue.detail or
+                             "Anlamsız/yer tutucu" in issue.detail):
+            risk_val = max(risk_val, _RISK_ORDER["Yüksek"])
+
     elif issue.issue_type == "type_drift":
         risk_val = max(risk_val, _RISK_ORDER["Kritik"])
 

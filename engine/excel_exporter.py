@@ -26,8 +26,8 @@ def export_to_excel(
     # Build a lookup: (row_idx, col) -> issue_type (keep highest priority)
     cell_issues: dict[tuple[int, str], str] = {}
     issue_priority = [
-        "type_drift", "format_issue", "range_violation",
-        "missing_value", "semantic_inconsistency", "duplicate",
+        "type_drift", "format_issue", "semantic_inconsistency",
+        "range_violation", "missing_value", "duplicate",
         "sparse_column", "meaningless_feature",
     ]
     for issue in issues:
